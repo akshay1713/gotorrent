@@ -1,43 +1,37 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"github.com/zeebo/bencode"
-	"net/http"
+	"net"
 	"os"
-	"strconv"
 )
 
+type IP net.IP
+
 func main() {
-	file_reader, err := os.Open(os.Args[1])
-	handleErr(err)
-	decoder := bencode.NewDecoder(file_reader)
+	//file_reader, err := os.Open(os.Args[1])
+	torrent_data := getDataFromFile(os.Args[1])
+	response_string := torrent_data.getTrackerData()
+	fmt.Println(response_string)
 	var torrent interface{}
-	err = decoder.Decode(&torrent)
-	handleErr(err)
+	_ = bencode.DecodeString(response_string, &torrent)
 	torrent_map := torrent.(map[string]interface{})
-	info := torrent_map["info"]
-	announce_url := torrent_map["announce"].(string)
-	handleErr(err)
-	info_map := info.(map[string]interface{})
-	var files []interface{}
-	fmt.Println("The following information is available in the torrent file")
-	for k, v := range info_map {
-		fmt.Println(k)
-		if k == "files" {
-			files = v.([]interface{})
-		}
+	for k, _ := range torrent_map {
+		fmt.Println("KEY:------ \n", k)
 	}
-	total_length := getTotalFileLength(files)
-	bencoded_info, _ := bencode.EncodeString(info)
-	h := sha1.New()
-	h.Write([]byte(bencoded_info))
-	sha1_hash := hex.EncodeToString(h.Sum(nil))
-	encoded_hash := encodeInfoHash(sha1_hash)
-	announce_url += "?info_hash=" + encoded_hash + "&left=" + strconv.Itoa(int(total_length))
-	conn, err := http.Get(announce_url)
-	handleErr(err)
-	handleResponse(conn)
+	peers_string := torrent_map["peers"].(string)
+	peer_bytes := ([]byte(peers_string))
+	fmt.Println(peer_bytes)
+	fmt.Println(len(peer_bytes))
+	var peers []Peer
+	var ip net.IP
+	var port uint16
+	for i := 0; i < len(peer_bytes); i += 6 {
+		fmt.Println(net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3]))
+		ip = net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3])
+		port = uint16(peer_bytes[i+4]) * 256
+		fmt.Println(port)
+		peers = append(peers, Peer{ip, port})
+	}
 }
