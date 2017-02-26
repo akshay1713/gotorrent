@@ -2,36 +2,34 @@ package main
 
 import (
 	"fmt"
-	"github.com/zeebo/bencode"
-	"net"
+	//"github.com/zeebo/bencode"
+	//"net"
 	"os"
 )
 
-type IP net.IP
-
 func main() {
-	//file_reader, err := os.Open(os.Args[1])
 	torrent_data := getDataFromFile(os.Args[1])
-	response_string := torrent_data.getTrackerData()
-	fmt.Println(response_string)
-	var torrent interface{}
-	_ = bencode.DecodeString(response_string, &torrent)
-	torrent_map := torrent.(map[string]interface{})
+	torrent_map := torrent_data.getTrackerData()
 	for k, _ := range torrent_map {
 		fmt.Println("KEY:------ \n", k)
 	}
-	peers_string := torrent_map["peers"].(string)
-	peer_bytes := ([]byte(peers_string))
-	fmt.Println(peer_bytes)
-	fmt.Println(len(peer_bytes))
-	var peers []Peer
-	var ip net.IP
-	var port uint16
-	for i := 0; i < len(peer_bytes); i += 6 {
-		fmt.Println(net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3]))
-		ip = net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3])
-		port = uint16(peer_bytes[i+4]) * 256
-		fmt.Println(port)
-		peers = append(peers, Peer{ip, port})
+	peer_bytes := torrent_map["peers"].([]byte)
+	//A slice of bytes. Each peers is represented by 6 bytes.
+	//The first 4 are its IPv4 address, the next 2 are the port number
+	peers := getPeersFromByteSlice(peer_bytes)
+	fmt.Println("PEERS FOUND ARE ", len(peers))
+	contacted := false
+	peer_count := 0
+	for !contacted {
+		err := torrent_data.handshakeWithPeer(peers[peer_count])
+		if peer_count == len(peers)-1 {
+			break
+		}
+		if err != nil {
+			fmt.Println("ERROR FROM CLIENT:\n", err)
+			peer_count = peer_count + 1
+			continue
+		}
+		contacted = true
 	}
 }
