@@ -22,7 +22,7 @@ import (
 )
 
 type TorrentData struct {
-	Info_Hash    string
+	info_hash    string
 	left         int64
 	downloaded   int64
 	uploaded     int64
@@ -35,8 +35,8 @@ type TorrentData struct {
 func (td TorrentData) getTrackerData() map[string]interface{} {
 	announce_url := td.announce_url
 	fmt.Println("\n***************ANNOUNCE URL **********\n", announce_url, "\n***************\n")
-	fmt.Println(len(td.Info_Hash))
-	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.Info_Hash)))
+	fmt.Println(len(td.info_hash))
+	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.info_hash)))
 	announce_url += "?info_hash=" + encoded_hash + "&left=" + strconv.Itoa(int(td.left)) + "&compact=1"
 	fmt.Println("QUERY URL IS ", announce_url)
 	url, err := url.Parse(announce_url)
@@ -76,16 +76,17 @@ func (td TorrentData) getHandshakeRequest() string {
 	pstrlen := `\x13`
 	//8 bytes reserved for special use
 	reserved := `\x00\x00\x00\x00\x00\x00\x00\x00`
-	handshake_str := pstrlen + pstr + reserved + td.Info_Hash + td.peer_id
-	fmt.Printf("HANDSHAKE MESSAGE", handshake_str)
+	handshake_str := pstrlen + pstr + reserved + td.info_hash + td.peer_id
+	fmt.Printf("HANDSHAKE MESSAGE: %s\n", handshake_str)
 	return handshake_str
 }
 
 func (td TorrentData) handshakeWithPeer(peer Peer) error {
 	peer_address := fmt.Sprint(peer.ip) + ":" + strconv.Itoa(int(peer.port))
 	fmt.Println("Contacting ", peer_address)
+	peerAddr := net.TCPAddr{IP: peer.ip, Port: int(peer.port)}
 	handshake_msg := td.getHandshakeRequest()
-	conn, err := net.Dial("tcp", peer_address)
+	conn, err := net.DialTCP("tcp4", nil, &peerAddr)
 	if err != nil {
 		fmt.Println("\nERROR WHILE CONNECTING", err)
 		return err
@@ -202,14 +203,11 @@ func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64
 	var udp_request_id uint64 = 0x41727101980 //magic constant
 	transaction_id := rand.Uint32()
 	fmt.Println("SENDING TRANSACTION ID ", transaction_id)
-	udp_request := new(bytes.Buffer)
-	err = binary.Write(udp_request, binary.BigEndian, udp_request_id)
-	panicErr(err)
-	//send action as 0 for a connection request
-	err = binary.Write(udp_request, binary.BigEndian, uint32(0))
-	panicErr(err)
-	err = binary.Write(udp_request, binary.BigEndian, transaction_id)
-	panicErr(err)
+	var parameters []interface{}
+	parameters = append(parameters, udp_request_id)
+	parameters = append(parameters, uint32(0))
+	parameters = append(parameters, transaction_id)
+	udp_request := writeParamsToBuffer(parameters)
 	_, err = con.Write(udp_request.Bytes())
 	panicErr(err)
 	response_bytes := make([]byte, 16)
@@ -233,43 +231,34 @@ func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64
 	return connection_id, nil
 }
 
+func writeParamsToBuffer(parameters []interface{}) *bytes.Buffer {
+	buf := new(bytes.Buffer)
+	for i := range parameters {
+		err := binary.Write(buf, binary.BigEndian, parameters[i])
+		panicErr(err)
+	}
+	return buf
+}
+
 func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id uint64) map[string]interface{} {
 	transaction_id := rand.Uint32()
-	announce_request := new(bytes.Buffer)
-	err := binary.Write(announce_request, binary.BigEndian, connection_id)
-	panicErr(err)
-	//send action as 1 for an announce request
-	err = binary.Write(announce_request, binary.BigEndian, uint32(1))
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, transaction_id)
-	panicErr(err)
-	//binary.Write requires fixed size value or a slice of fixed slice values
-	err = binary.Write(announce_request, binary.BigEndian, []byte(td.Info_Hash))
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, []byte(td.peer_id))
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, td.downloaded)
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, td.left)
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, td.uploaded)
-	panicErr(err)
-	//use '0' for event, which means none. Check BEP15 for the various event types and implement them
-	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
-	//use default ip address, 0.
-	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
-	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
-	//number of peers wanted
+	var parameters []interface{}
+	parameters = append(parameters, connection_id)
+	parameters = append(parameters, uint32(1))
+	parameters = append(parameters, transaction_id)
+	parameters = append(parameters, []byte(td.info_hash))
+	parameters = append(parameters, []byte(td.peer_id))
+	parameters = append(parameters, td.downloaded)
+	parameters = append(parameters, td.left)
+	parameters = append(parameters, td.uploaded)
+	parameters = append(parameters, uint32(0))
+	parameters = append(parameters, uint32(0))
 	var num_want uint32 = 30
-	err = binary.Write(announce_request, binary.BigEndian, num_want)
-	panicErr(err)
-	//specify port number to use
-	err = binary.Write(announce_request, binary.BigEndian, uint16(6881))
-	panicErr(err)
-	_, err = con.Write(announce_request.Bytes())
+	parameters = append(parameters, num_want)
+	parameters = append(parameters, uint16(6881))
+	announce_request := writeParamsToBuffer(parameters)
+
+	_, err := con.Write(announce_request.Bytes())
 	panicErr(err)
 
 	response_len := 20 + 6*num_want

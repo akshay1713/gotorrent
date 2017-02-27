@@ -17,7 +17,6 @@ func main() {
 	//A slice of bytes. Each peers is represented by 6 bytes.
 	//The first 4 are its IPv4 address, the next 2 are the port number
 	peers := getPeersFromByteSlice(peer_bytes)
-	fmt.Println("PEERS FOUND ARE ", len(peers))
 	contacted := false
 	peer_count := 0
 	for !contacted {
