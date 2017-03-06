@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	//"bufio"
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
@@ -22,21 +22,30 @@ import (
 )
 
 type TorrentData struct {
-	Info_Hash    string
-	left         int64
-	downloaded   int64
-	uploaded     int64
-	files        []interface{}
-	announce_url string
+	info_hash     string
+	left          int64
+	downloaded    int64
+	uploaded      int64
+	files         []interface{}
+	announce_url  string
+	announce_list []string
 	//Use some sort of generator which follows convention for this. Currently S9NQEHHO48UDX16KDJWE is used always.
 	peer_id string
 }
 
-func (td TorrentData) getTrackerData() map[string]interface{} {
-	announce_url := td.announce_url
-	fmt.Println("\n***************ANNOUNCE URL **********\n", announce_url, "\n***************\n")
-	fmt.Println(len(td.Info_Hash))
-	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.Info_Hash)))
+func (td TorrentData) getTrackerDataFromAnnounceList() map[string]interface{} {
+	var tracker_response map[string]interface{}
+	for i := range td.announce_list {
+		tracker_response = td.getTrackerData(td.announce_list[i])
+		if tracker_response != nil {
+			return tracker_response
+		}
+	}
+	return nil
+}
+
+func (td TorrentData) getTrackerData(announce_url string) map[string]interface{} {
+	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.info_hash)))
 	announce_url += "?info_hash=" + encoded_hash + "&left=" + strconv.Itoa(int(td.left)) + "&compact=1"
 	fmt.Println("QUERY URL IS ", announce_url)
 	url, err := url.Parse(announce_url)
@@ -64,8 +73,6 @@ func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
 	var id uint64
 	id, err = td.getUDPConnectionId(conn)
 	panicErr(err)
-	fmt.Println("ID IS ", id)
-	fmt.Println("addr is", udpAddr)
 	return td.getDataFromUDPConnection(conn, id)
 }
 
@@ -76,30 +83,8 @@ func (td TorrentData) getHandshakeRequest() string {
 	pstrlen := `\x13`
 	//8 bytes reserved for special use
 	reserved := `\x00\x00\x00\x00\x00\x00\x00\x00`
-	handshake_str := pstrlen + pstr + reserved + td.Info_Hash + td.peer_id
-	fmt.Printf("HANDSHAKE MESSAGE", handshake_str)
+	handshake_str := pstrlen + pstr + reserved + td.info_hash + td.peer_id
 	return handshake_str
-}
-
-func (td TorrentData) handshakeWithPeer(peer Peer) error {
-	peer_address := fmt.Sprint(peer.ip) + ":" + strconv.Itoa(int(peer.port))
-	fmt.Println("Contacting ", peer_address)
-	handshake_msg := td.getHandshakeRequest()
-	conn, err := net.Dial("tcp", peer_address)
-	if err != nil {
-		fmt.Println("\nERROR WHILE CONNECTING", err)
-		return err
-	}
-	fmt.Println("CONNECTED SUCCESSFULLY", conn)
-	for {
-		fmt.Fprintf(conn, handshake_msg)
-		message, err := bufio.NewReader(conn).ReadString('\n')
-		if err != nil {
-			return err
-		}
-		fmt.Print("Message from server: " + message)
-	}
-	return nil
 }
 
 func getDataFromFile(file_name string) TorrentData {
@@ -111,7 +96,19 @@ func getDataFromFile(file_name string) TorrentData {
 	handleErr(err)
 	torrent_map := torrent.(map[string]interface{})
 	info := torrent_map["info"]
-	announce_url := torrent_map["announce"].(string)
+	announce_list_interface := torrent_map["announce-list"].([]interface{})
+	var temp_interface []interface{}
+	var announce_list []string
+	for i := range announce_list_interface {
+		temp_interface = announce_list_interface[i].([]interface{})
+		announce_list = append(announce_list, temp_interface[0].(string))
+	}
+	announce_url := announce_list[0]
+	if announce_url, exists := torrent_map["announce"]; !exists {
+		fmt.Println("announce url not found")
+	} else {
+		fmt.Println("announce url found", announce_url)
+	}
 	handleErr(err)
 	info_map := info.(map[string]interface{})
 	var files []interface{}
@@ -129,7 +126,7 @@ func getDataFromFile(file_name string) TorrentData {
 	//decoded, err := dht.DecodeInfoHash(sha1_hash)
 	panicErr(err)
 	//Use 0 as amount of file downloaded for now. Handle this later
-	torrent_data := TorrentData{sha1_hash, total_length, int64(0), int64(0), files, announce_url, "S9NQEHHO48UDX16KDJWE"}
+	torrent_data := TorrentData{sha1_hash, total_length, int64(0), int64(0), files, announce_url, announce_list, "S9NQEHHO48UDX16KDJWE"}
 	return torrent_data
 }
 
@@ -244,7 +241,7 @@ func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id u
 	err = binary.Write(announce_request, binary.BigEndian, transaction_id)
 	panicErr(err)
 	//binary.Write requires fixed size value or a slice of fixed slice values
-	err = binary.Write(announce_request, binary.BigEndian, []byte(td.Info_Hash))
+	err = binary.Write(announce_request, binary.BigEndian, []byte(td.info_hash))
 	panicErr(err)
 	err = binary.Write(announce_request, binary.BigEndian, []byte(td.peer_id))
 	panicErr(err)
@@ -303,17 +300,4 @@ func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id u
 	panicErr(err)
 	udp_tracker_data["peers"] = peer_bytes
 	return udp_tracker_data
-}
-
-func getPeersFromByteSlice(peer_bytes []byte) []Peer {
-	var peers []Peer
-	var ip net.IP
-	var port uint16
-	for i := 0; i < len(peer_bytes); i += 6 {
-		ip = net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3])
-		//shift bits to handle endianness
-		port = uint16(peer_bytes[i+4]) << 8
-		peers = append(peers, Peer{ip, port})
-	}
-	return peers
 }

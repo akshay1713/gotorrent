@@ -9,7 +9,7 @@ import (
 
 func main() {
 	torrent_data := getDataFromFile(os.Args[1])
-	torrent_map := torrent_data.getTrackerData()
+	torrent_map := torrent_data.getTrackerDataFromAnnounceList()
 	for k, _ := range torrent_map {
 		fmt.Println("KEY:------ \n", k)
 	}
@@ -18,18 +18,5 @@ func main() {
 	//The first 4 are its IPv4 address, the next 2 are the port number
 	peers := getPeersFromByteSlice(peer_bytes)
 	fmt.Println("PEERS FOUND ARE ", len(peers))
-	contacted := false
-	peer_count := 0
-	for !contacted {
-		err := torrent_data.handshakeWithPeer(peers[peer_count])
-		if peer_count == len(peers)-1 {
-			break
-		}
-		if err != nil {
-			fmt.Println("ERROR FROM CLIENT:\n", err)
-			peer_count = peer_count + 1
-			continue
-		}
-		contacted = true
-	}
+	connectToAllPeers(peers)
 }
