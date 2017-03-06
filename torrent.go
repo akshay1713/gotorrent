@@ -199,14 +199,11 @@ func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64
 	var udp_request_id uint64 = 0x41727101980 //magic constant
 	transaction_id := rand.Uint32()
 	fmt.Println("SENDING TRANSACTION ID ", transaction_id)
-	udp_request := new(bytes.Buffer)
-	err = binary.Write(udp_request, binary.BigEndian, udp_request_id)
-	panicErr(err)
-	//send action as 0 for a connection request
-	err = binary.Write(udp_request, binary.BigEndian, uint32(0))
-	panicErr(err)
-	err = binary.Write(udp_request, binary.BigEndian, transaction_id)
-	panicErr(err)
+	var parameters []interface{}
+	parameters = append(parameters, udp_request_id)
+	parameters = append(parameters, uint32(0))
+	parameters = append(parameters, transaction_id)
+	udp_request := writeParamsToBuffer(parameters)
 	_, err = con.Write(udp_request.Bytes())
 	panicErr(err)
 	response_bytes := make([]byte, 16)
@@ -228,6 +225,15 @@ func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64
 		return
 	}
 	return connection_id, nil
+}
+
+func writeParamsToBuffer(parameters []interface{}) *bytes.Buffer {
+	buf := new(bytes.Buffer)
+	for i := range parameters {
+		err := binary.Write(buf, binary.BigEndian, parameters[i])
+		panicErr(err)
+	}
+	return buf
 }
 
 func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id uint64) map[string]interface{} {
@@ -261,12 +267,11 @@ func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id u
 	panicErr(err)
 	//number of peers wanted
 	var num_want uint32 = 30
-	err = binary.Write(announce_request, binary.BigEndian, num_want)
-	panicErr(err)
-	//specify port number to use
-	err = binary.Write(announce_request, binary.BigEndian, uint16(6881))
-	panicErr(err)
-	_, err = con.Write(announce_request.Bytes())
+	parameters = append(parameters, num_want)
+	parameters = append(parameters, uint16(6881))
+	announce_request := writeParamsToBuffer(parameters)
+
+	_, err := con.Write(announce_request.Bytes())
 	panicErr(err)
 
 	response_len := 20 + 6*num_want
