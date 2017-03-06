@@ -267,11 +267,8 @@ func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id u
 	panicErr(err)
 	//number of peers wanted
 	var num_want uint32 = 30
-	parameters = append(parameters, num_want)
-	parameters = append(parameters, uint16(6881))
-	announce_request := writeParamsToBuffer(parameters)
 
-	_, err := con.Write(announce_request.Bytes())
+	_, err = con.Write(announce_request.Bytes())
 	panicErr(err)
 
 	response_len := 20 + 6*num_want
