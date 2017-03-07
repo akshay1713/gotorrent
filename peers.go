@@ -61,7 +61,13 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections PeerConnec
 		fmt.Println("from peer connection gor", connected_peer)
 		ip_addr := connected_peer.ip.String() + ":" + strconv.Itoa(int(connected_peer.port))
 		peer_connections[ip_addr] = connected_peer.conn
-		fmt.Println(connected_peer, "Peer connected")
+		connected_peer.sendHandshake(td)
 	}
 	fmt.Scanln(&pause)
+}
+
+func (peer ConnectedPeer) sendHandshake(td TorrentData) {
+	fmt.Println("Sending handshake")
+	handshake_msg := getHandshakeMessage(td.info_hash, td.peer_id)
+	fmt.Println(handshake_msg, len(handshake_msg))
 }
