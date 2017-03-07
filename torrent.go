@@ -76,17 +76,6 @@ func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
 	return td.getDataFromUDPConnection(conn, id)
 }
 
-func (td TorrentData) getHandshakeRequest() string {
-	//name of protocol
-	pstr := "Bittorrent protocol"
-	//length of protocol name
-	pstrlen := `\x13`
-	//8 bytes reserved for special use
-	reserved := `\x00\x00\x00\x00\x00\x00\x00\x00`
-	handshake_str := pstrlen + pstr + reserved + td.info_hash + td.peer_id
-	return handshake_str
-}
-
 func getDataFromFile(file_name string) TorrentData {
 	file_reader, err := os.Open(file_name)
 	handleErr(err)

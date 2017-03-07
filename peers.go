@@ -11,6 +11,14 @@ type Peer struct {
 	port uint16
 }
 
+type ConnectedPeer struct {
+	ip   net.IP
+	port uint16
+	conn net.Conn
+}
+
+type PeerConnections map[string]net.Conn
+
 func getPeersFromByteSlice(peer_bytes []byte) []Peer {
 	var peers []Peer
 	var ip net.IP
@@ -30,22 +38,30 @@ func (peer Peer) handshakeWithPeer() error {
 	return nil
 }
 
-func (peer Peer) connectToPeer() {
-	fmt.Println("CONNECTING FROM GOR", peer.ip.String()+":"+strconv.Itoa(int(peer.port)))
-	tcpAddr := net.TCPAddr{IP: peer.ip, Port: int(peer.port)}
-	conn, err := net.DialTCP("tcp", nil, &tcpAddr)
+func (peer Peer) connectToPeer(c chan ConnectedPeer, td TorrentData, peer_connections PeerConnections) {
+	ip_addr := peer.ip.String() + ":" + strconv.Itoa(int(peer.port))
+	conn, err := net.DialTimeout("tcp", ip_addr, 8000000000)
 	if err != nil {
 		fmt.Println("CONNECTION ERROR: ", err)
 		return
 	}
-	fmt.Println("CONNECTION DETAILS ", peer.ip.String(), conn, err)
+	fmt.Println("CONNECTION DETAILS ", ip_addr, conn, err)
+	connected_peer := ConnectedPeer{peer.ip, peer.port, conn}
+	c <- connected_peer
 }
 
-func connectToAllPeers(peers []Peer) {
-	fmt.Println("CONNECTING TO ALL PEERS ", len(peers))
+func connectToAllPeers(peers []Peer, td TorrentData, peer_connections PeerConnections) {
+	var c chan ConnectedPeer = make(chan ConnectedPeer)
 	for i := range peers {
-		go peers[i].connectToPeer()
+		go peers[i].connectToPeer(c, td, peer_connections)
 	}
 	var pause string
+	for {
+		connected_peer := <-c
+		fmt.Println("from peer connection gor", connected_peer)
+		ip_addr := connected_peer.ip.String() + ":" + strconv.Itoa(int(connected_peer.port))
+		peer_connections[ip_addr] = connected_peer.conn
+		fmt.Println(connected_peer, "Peer connected")
+	}
 	fmt.Scanln(&pause)
 }
