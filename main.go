@@ -22,6 +22,6 @@ func main() {
 	//The first 4 are its IPv4 address, the next 2 are the port number
 	peers := getPeersFromByteSlice(peer_bytes)
 	fmt.Println("PEERS FOUND ARE ", len(peers))
-	peer_connections := make(PeerConnections)
+	peer_connections := make(VerifiedPeerConnections)
 	connectToAllPeers(peers, torrent_data, peer_connections)
 }
