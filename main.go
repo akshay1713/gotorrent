@@ -8,6 +8,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Please enter the name of the torrent file")
+		return
+	}
 	torrent_data := getDataFromFile(os.Args[1])
 	torrent_map := torrent_data.getTrackerDataFromAnnounceList()
 	for k, _ := range torrent_map {
