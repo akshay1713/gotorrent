@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -20,10 +23,11 @@ type ConnectedPeer struct {
 }
 
 type VerifiedPeer struct {
-	ip      net.IP
-	port    uint16
-	peer_id string
-	conn    net.Conn
+	ip       net.IP
+	port     uint16
+	peer_id  string
+	conn     net.Conn
+	bitfield []byte
 }
 
 type VerifiedPeerConnections map[string]net.Conn
@@ -51,7 +55,7 @@ func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData
 	ip_addr := peer.ip.String() + ":" + strconv.Itoa(int(peer.port))
 	conn, err := net.DialTimeout("tcp", ip_addr, 8*time.Second)
 	if err != nil {
-		fmt.Println("CONNECTION ERROR: ", err)
+		fmt.Println("Error while connecting to peer ", err)
 		return
 	}
 	connected_peer := ConnectedPeer{peer.ip, peer.port, conn}
@@ -62,68 +66,95 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 	var connected_chan chan ConnectedPeer = make(chan ConnectedPeer)
 	var verified_chan chan VerifiedPeer = make(chan VerifiedPeer)
 	for i := range peers {
+		if peers[i].ip.String() == "0.0.0.0" {
+			continue
+		}
 		go peers[i].connectToPeer(connected_chan, td, peer_connections)
 	}
-	var pause string
 	for {
 		select {
 
 		case connected_peer := <-connected_chan:
-			fmt.Println("from peer connection gor", connected_peer)
 			go connected_peer.handshake(td, verified_chan)
 
 		case verified_peer := <-verified_chan:
 			ip_addr := verified_peer.ip.String() + ":" + strconv.Itoa(int(verified_peer.port))
 			peer_connections[ip_addr] = verified_peer.conn
-			fmt.Println("Received verified peer ", verified_peer)
+			go verified_peer.followUp()
 		}
 	}
-	fmt.Scanln(&pause)
+}
+
+func (peer *VerifiedPeer) followUp() {
+	response := make([]byte, 4)
+	fmt.Println("Verified peer connection is", peer.conn)
+	_, err := io.ReadFull(peer.conn, response)
+	if err != nil {
+		fmt.Println("Error while getting message length verified peer", err)
+	}
+	payload_length := binary.BigEndian.Uint32(response)
+	fmt.Println("Message length", response, payload_length)
+	bitfield := make([]byte, payload_length)
+	_, err = io.ReadFull(peer.conn, bitfield)
+	if err != nil {
+		fmt.Println("Error while reading from verified peer", err, peer.conn)
+	}
+	msg_type, err := getMessageType(bitfield[0])
+	if err != nil {
+		fmt.Println("MESSAGE TYPE ERROR: ", err, bitfield[0])
+	}
+	peer.bitfield = bitfield
+	fmt.Println("Message from verified peer with type", bitfield, msg_type)
 }
 
 func (peer ConnectedPeer) handshake(td TorrentData, verified_chan chan VerifiedPeer) {
 	peer.sendHandshake(td)
-	err := peer.completeHandshake()
+	response, err := peer.completeHandshake(td)
 	if err != nil {
 		fmt.Println("Error while completing handshake", err)
 		return
 	}
-	verified_peer := VerifiedPeer{peer.ip, peer.port, "ksajhf", peer.conn}
+	verified_peer := VerifiedPeer{
+		ip:      peer.ip,
+		port:    peer.port,
+		peer_id: string(response),
+		conn:    peer.conn,
+	}
 	verified_chan <- verified_peer
 }
 
 func (peer ConnectedPeer) sendHandshake(td TorrentData) {
 	handshake_msg := getHandshakeMessage(td.info_hash, td.peer_id)
 	fmt.Println(handshake_msg, len(handshake_msg))
-	written, err := peer.conn.Write(handshake_msg)
+	_, err := peer.conn.Write(handshake_msg)
 	panicErr(err)
-	fmt.Println(written, " bytes written during handshake")
 }
 
-func (peer ConnectedPeer) completeHandshake() error {
+func (peer ConnectedPeer) completeHandshake(td TorrentData) ([]byte, error) {
 	response := make([]byte, 68)
-	read, err := peer.conn.Read(response)
+	_, err := peer.conn.Read(response)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
-	fmt.Println("response is ", response, " bytes read ", read)
-	err = verifyHandshakeResponse(response)
+	err = verifyHandshakeResponse(response, td)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
 	fmt.Println("Response Handshake verified!")
-	verified_peer_info := response[20:]
-	fmt.Println("verified peer info ", verified_peer_info)
-	return nil
+	verified_peer_info := response[48:]
+	return verified_peer_info, nil
 }
 
-func verifyHandshakeResponse(response []byte) error {
+func verifyHandshakeResponse(response []byte, td TorrentData) error {
 	protocol_name := "BitTorrent protocol"
 	if response[0] != byte(len(protocol_name)) {
 		return errors.New("Protocol name length not matched")
 	}
 	if string(response[1:20]) != protocol_name {
 		return errors.New("Protocol name not matched " + string(response[1:20]))
+	}
+	if !bytes.Equal(response[28:48], []byte(td.info_hash)) {
+		return errors.New("Info hash not matched")
 	}
 	return nil
 }
