@@ -30,7 +30,9 @@ type TorrentData struct {
 	announce_url  string
 	announce_list []string
 	//Use some sort of generator which follows convention for this. Currently S9NQEHHO48UDX16KDJWE is used always.
-	peer_id string
+	peer_id      string
+	pieces       [][]byte
+	piece_length int64
 }
 
 func (td TorrentData) getTrackerDataFromAnnounceList() map[string]interface{} {
@@ -76,6 +78,7 @@ func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
 	return td.getDataFromUDPConnection(conn, id)
 }
 
+//Refer to https://wiki.theory.org/BitTorrentSpecification#Metainfo_File_Structure
 func getDataFromFile(file_name string) TorrentData {
 	file_reader, err := os.Open(file_name)
 	handleErr(err)
@@ -101,9 +104,15 @@ func getDataFromFile(file_name string) TorrentData {
 	handleErr(err)
 	info_map := info.(map[string]interface{})
 	var files []interface{}
+	var pieces [][]byte
+	var piece_length int64
 	for k, v := range info_map {
 		if k == "files" {
 			files = v.([]interface{})
+		} else if k == "pieces" {
+			pieces = getPiecesSlice([]byte(v.(string)))
+		} else if k == "piece length" {
+			piece_length = v.(int64)
 		}
 	}
 	total_length := getTotalFileLength(files)
@@ -115,8 +124,30 @@ func getDataFromFile(file_name string) TorrentData {
 	//decoded, err := dht.DecodeInfoHash(sha1_hash)
 	panicErr(err)
 	//Use 0 as amount of file downloaded for now. Handle this later
-	torrent_data := TorrentData{sha1_hash, total_length, int64(0), int64(0), files, announce_url, announce_list, "S9NQEHHO48UDX16KDJWE"}
+	torrent_data := TorrentData{
+		sha1_hash,
+		total_length,
+		int64(0),
+		int64(0),
+		files,
+		announce_url,
+		announce_list,
+		"S9NQEHHO48UDX16KDJWE",
+		pieces,
+		piece_length,
+	}
 	return torrent_data
+}
+
+func getPiecesSlice(pieces_bytes []byte) [][]byte {
+	var num_pieces = len(pieces_bytes) / 20
+	fmt.Println("Total number of pieces are ", num_pieces)
+	pieces_slice := make([][]byte, num_pieces)
+	for i := range pieces_slice {
+		pieces_slice[i] = make([]byte, 20)
+		pieces_slice[i] = pieces_bytes[i*20 : i*20+20]
+	}
+	return pieces_slice
 }
 
 func bencodeStringToMap(bencode_string string) map[string]interface{} {
