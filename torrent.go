@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	//"reflect"
+	_ "reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,13 +26,18 @@ type TorrentData struct {
 	left          int64
 	downloaded    int64
 	uploaded      int64
-	files         []interface{}
 	announce_url  string
 	announce_list []string
 	//Use some sort of generator which follows convention for this. Currently S9NQEHHO48UDX16KDJWE is used always.
 	peer_id      string
 	pieces       [][]byte
 	piece_length int64
+	files        []File
+}
+
+type File struct {
+	length int64
+	path   string
 }
 
 func (td TorrentData) getTrackerDataFromAnnounceList() map[string]interface{} {
@@ -52,7 +57,6 @@ func (td TorrentData) getTrackerData(announce_url string) map[string]interface{}
 	fmt.Println("QUERY URL IS ", announce_url)
 	url, err := url.Parse(announce_url)
 	handleErr(err)
-	fmt.Println("SCHEME IS ", url.Scheme)
 	switch url.Scheme {
 	case "http":
 		response_string := td.getHTTPTrackerData(announce_url)
@@ -66,12 +70,10 @@ func (td TorrentData) getTrackerData(announce_url string) map[string]interface{}
 }
 
 func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
-	fmt.Println("CONNECTING TO UDP TRACKER", url.Host)
 	udpAddr, err := net.ResolveUDPAddr("udp", url.Host)
 	panicErr(err)
 	conn, err := net.DialUDP("udp", nil, udpAddr)
 	panicErr(err)
-	fmt.Println("CONN OBJECT IS ", conn)
 	var id uint64
 	id, err = td.getUDPConnectionId(conn)
 	panicErr(err)
@@ -103,12 +105,12 @@ func getDataFromFile(file_name string) TorrentData {
 	}
 	handleErr(err)
 	info_map := info.(map[string]interface{})
-	var files []interface{}
 	var pieces [][]byte
 	var piece_length int64
+	var files []File
 	for k, v := range info_map {
 		if k == "files" {
-			files = v.([]interface{})
+			files = getFilesData(v)
 		} else if k == "pieces" {
 			pieces = getPiecesSlice([]byte(v.(string)))
 		} else if k == "piece length" {
@@ -120,7 +122,6 @@ func getDataFromFile(file_name string) TorrentData {
 	h := sha1.New()
 	h.Write([]byte(bencoded_info))
 	sha1_hash := string(h.Sum(nil))
-	fmt.Println("SHA1 HASH IS ", sha1_hash, " ", len(sha1_hash))
 	//decoded, err := dht.DecodeInfoHash(sha1_hash)
 	panicErr(err)
 	//Use 0 as amount of file downloaded for now. Handle this later
@@ -129,19 +130,34 @@ func getDataFromFile(file_name string) TorrentData {
 		total_length,
 		int64(0),
 		int64(0),
-		files,
 		announce_url,
 		announce_list,
 		"S9NQEHHO48UDX16KDJWE",
 		pieces,
 		piece_length,
+		files,
 	}
+	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length)
 	return torrent_data
+}
+func getFilesData(raw_file_data interface{}) []File {
+	files_interface := raw_file_data.([]interface{})
+	var files []File
+	for i := range files_interface {
+		file_map := files_interface[i].(map[string]interface{})
+		file_length := file_map["length"].(int64)
+		var file_path string
+		file_path_elements := file_map["path"].([]interface{})
+		for j := range file_path_elements {
+			file_path += file_path_elements[j].(string)
+		}
+		files = append(files, File{length: file_length, path: file_path})
+	}
+	return files
 }
 
 func getPiecesSlice(pieces_bytes []byte) [][]byte {
 	var num_pieces = len(pieces_bytes) / 20
-	fmt.Println("Total number of pieces are ", num_pieces)
 	pieces_slice := make([][]byte, num_pieces)
 	for i := range pieces_slice {
 		pieces_slice[i] = make([]byte, 20)
@@ -157,11 +173,11 @@ func bencodeStringToMap(bencode_string string) map[string]interface{} {
 	return torrent_map
 }
 
-func getTotalFileLength(files []interface{}) int64 {
+func getTotalFileLength(files []File) int64 {
 	var total_length int64
 	total_length = 0
 	for i := range files {
-		total_length += (files[i].(map[string]interface{})["length"]).(int64)
+		total_length += files[i].length
 	}
 	return total_length
 }
@@ -200,7 +216,6 @@ func percentEncode(str string) string {
 }
 
 func handleResponse(response *http.Response) string {
-	fmt.Println("handling response")
 	defer response.Body.Close()
 	response_bytes, err := ioutil.ReadAll(response.Body)
 	handleErr(err)
@@ -218,7 +233,6 @@ func (td TorrentData) getHTTPTrackerData(announce_url string) string {
 func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64, err error) {
 	var udp_request_id uint64 = 0x41727101980 //magic constant
 	transaction_id := rand.Uint32()
-	fmt.Println("SENDING TRANSACTION ID ", transaction_id)
 	udp_request := new(bytes.Buffer)
 	err = binary.Write(udp_request, binary.BigEndian, udp_request_id)
 	panicErr(err)
@@ -231,16 +245,13 @@ func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64
 	panicErr(err)
 	response_bytes := make([]byte, 16)
 	_, err = con.Read(response_bytes)
-	fmt.Println(response_bytes)
 	panicErr(err)
 	connection_response := bytes.NewBuffer(response_bytes)
 	var response_action uint32
 	err = binary.Read(connection_response, binary.BigEndian, &response_action)
-	fmt.Println("ACTION IS ", response_action)
 	panicErr(err)
 	var response_transaction_id uint32
 	err = binary.Read(connection_response, binary.BigEndian, &response_transaction_id)
-	fmt.Println("TRANSACTION ID FROM RESPONSE IS", response_transaction_id)
 	panicErr(err)
 
 	err = binary.Read(connection_response, binary.BigEndian, &connection_id)

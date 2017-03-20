@@ -39,9 +39,7 @@ func getPeersFromByteSlice(peer_bytes []byte) []Peer {
 	for i := 0; i < len(peer_bytes); i += 6 {
 		fmt.Println(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3])
 		ip = net.IPv4(peer_bytes[i], peer_bytes[i+1], peer_bytes[i+2], peer_bytes[i+3])
-		//shift bits to handle endianness
-		port = uint16(peer_bytes[i+4]) << 8
-		port |= uint16(peer_bytes[i+5])
+		port = binary.BigEndian.Uint16([]byte{peer_bytes[i+4], peer_bytes[i+5]})
 		peers = append(peers, Peer{ip, port})
 	}
 	return peers
@@ -85,26 +83,40 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 	}
 }
 
+func (peer *VerifiedPeer) getNextMessage() ([]byte, error) {
+	payload_length_msg := make([]byte, 4)
+	_, err := io.ReadFull(peer.conn, payload_length_msg)
+	if err != nil {
+		return []byte{}, errors.New("Error while getting message length")
+	}
+	payload_length := binary.BigEndian.Uint32(payload_length_msg)
+	msg := make([]byte, payload_length)
+	_, err = io.ReadFull(peer.conn, msg)
+	if err != nil {
+		return []byte{}, errors.New("Error while getting message")
+	}
+	return msg, nil
+}
+
 func (peer *VerifiedPeer) followUp() {
-	response := make([]byte, 4)
 	fmt.Println("Verified peer connection is", peer.conn)
-	_, err := io.ReadFull(peer.conn, response)
-	if err != nil {
-		fmt.Println("Error while getting message length verified peer", err)
-	}
-	payload_length := binary.BigEndian.Uint32(response)
-	fmt.Println("Message length", response, payload_length)
-	bitfield := make([]byte, payload_length)
-	_, err = io.ReadFull(peer.conn, bitfield)
-	if err != nil {
-		fmt.Println("Error while reading from verified peer", err, peer.conn)
-	}
+	bitfield, err := peer.getNextMessage()
+	handleErr(err)
 	msg_type, err := getMessageType(bitfield[0])
 	if err != nil {
 		fmt.Println("MESSAGE TYPE ERROR: ", err, bitfield[0])
+		return
 	}
 	peer.bitfield = bitfield
 	fmt.Println("Message from verified peer with type", bitfield, msg_type)
+	i_msg := getInterestedMessage()
+	_, err = peer.conn.Write(i_msg)
+	if err != nil {
+		fmt.Println("Error while sending interested message", err)
+	}
+	i_resp, err := peer.getNextMessage()
+	handleErr(err)
+	fmt.Println("RESPONSE TO INTEREST ", i_resp)
 }
 
 func (peer ConnectedPeer) handshake(td TorrentData, verified_chan chan VerifiedPeer) {

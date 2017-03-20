@@ -18,6 +18,10 @@ func getHandshakeMessage(info_hash string, peer_id string) []byte {
 	return handshake_msg
 }
 
+func getInterestedMessage() []byte{
+	return []byte{1,2}
+}
+
 func getMessageType(message_id byte) (string, error) {
 	message_types := map[byte]string{
 		4: "have",
