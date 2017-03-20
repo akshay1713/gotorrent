@@ -33,6 +33,7 @@ type TorrentData struct {
 	pieces       [][]byte
 	piece_length int64
 	files        []File
+	bitfield     []byte
 }
 
 type File struct {
@@ -124,32 +125,56 @@ func getDataFromFile(file_name string) TorrentData {
 	sha1_hash := string(h.Sum(nil))
 	//decoded, err := dht.DecodeInfoHash(sha1_hash)
 	panicErr(err)
+	bitfield := getBitfieldFromPieceCount(len(pieces))
 	//Use 0 as amount of file downloaded for now. Handle this later
 	torrent_data := TorrentData{
-		sha1_hash,
-		total_length,
-		int64(0),
-		int64(0),
-		announce_url,
-		announce_list,
-		"S9NQEHHO48UDX16KDJWE",
-		pieces,
-		piece_length,
-		files,
+		info_hash:     sha1_hash,
+		left:          total_length,
+		downloaded:    int64(0),
+		uploaded:      int64(0),
+		announce_url:  announce_url,
+		announce_list: announce_list,
+		peer_id:       "S9NQEHHO48UDX16KDJWE",
+		pieces:        pieces,
+		piece_length:  piece_length,
+		files:         files,
+		bitfield:      bitfield,
 	}
-	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length)
+	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length, bitfield)
 	return torrent_data
 }
+
+func getBitfieldFromPieceCount(num_pieces int) []byte {
+	bitfield := make([]byte, (num_pieces+(num_pieces%16))/8)
+	i := 0
+	j := 0
+	for i = 0; i < num_pieces-8; i += 8 {
+		bitfield[j] = 255
+		j++
+	}
+	bitfield_last := ""
+	remaining := num_pieces - i
+	for k := 0; k < remaining; k++ {
+		bitfield_last += "1"
+	}
+	for k := len(bitfield_last); k < 8; k++ {
+		bitfield_last += "0"
+	}
+	bitfield_byte, _ := strconv.ParseInt(bitfield_last, 2, 64)
+	bitfield[len(bitfield)-1] = uint8(bitfield_byte)
+	return bitfield
+}
+
 func getFilesData(raw_file_data interface{}) []File {
 	files_interface := raw_file_data.([]interface{})
 	var files []File
 	for i := range files_interface {
 		file_map := files_interface[i].(map[string]interface{})
 		file_length := file_map["length"].(int64)
-		var file_path string
+		file_path := "."
 		file_path_elements := file_map["path"].([]interface{})
 		for j := range file_path_elements {
-			file_path += file_path_elements[j].(string)
+			file_path += "/" + file_path_elements[j].(string)
 		}
 		files = append(files, File{length: file_length, path: file_path})
 	}

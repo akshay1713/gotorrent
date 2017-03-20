@@ -63,6 +63,7 @@ func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData
 func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPeerConnections) {
 	var connected_chan chan ConnectedPeer = make(chan ConnectedPeer)
 	var verified_chan chan VerifiedPeer = make(chan VerifiedPeer)
+	var saved_bitfield_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
 	for i := range peers {
 		if peers[i].ip.String() == "0.0.0.0" {
 			continue
@@ -78,7 +79,10 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 		case verified_peer := <-verified_chan:
 			ip_addr := verified_peer.ip.String() + ":" + strconv.Itoa(int(verified_peer.port))
 			peer_connections[ip_addr] = verified_peer.conn
-			go verified_peer.followUp()
+			go verified_peer.saveBitfield(saved_bitfield_chan)
+
+		case verified_peer := <-saved_bitfield_chan:
+			fmt.Println("bitfield of peer saved", verified_peer.ip.String()+":"+strconv.Itoa(int(verified_peer.port)))
 		}
 	}
 }
@@ -98,7 +102,7 @@ func (peer *VerifiedPeer) getNextMessage() ([]byte, error) {
 	return msg, nil
 }
 
-func (peer *VerifiedPeer) followUp() {
+func (peer *VerifiedPeer) saveBitfield(saved_bitfield_chan chan *VerifiedPeer) {
 	fmt.Println("Verified peer connection is", peer.conn)
 	bitfield, err := peer.getNextMessage()
 	handleErr(err)
@@ -107,8 +111,12 @@ func (peer *VerifiedPeer) followUp() {
 		fmt.Println("MESSAGE TYPE ERROR: ", err, bitfield[0])
 		return
 	}
+	if msg_type != "bitfield" {
+		fmt.Println("Msg type is not bitfield ", msg_type)
+		return
+	}
+	fmt.Println("Bitfield is ", bitfield)
 	peer.bitfield = bitfield
-	fmt.Println("Message from verified peer with type", bitfield, msg_type)
 	i_msg := getInterestedMessage()
 	_, err = peer.conn.Write(i_msg)
 	if err != nil {
@@ -117,6 +125,7 @@ func (peer *VerifiedPeer) followUp() {
 	i_resp, err := peer.getNextMessage()
 	handleErr(err)
 	fmt.Println("RESPONSE TO INTEREST ", i_resp)
+	saved_bitfield_chan <- peer
 }
 
 func (peer ConnectedPeer) handshake(td TorrentData, verified_chan chan VerifiedPeer) {
