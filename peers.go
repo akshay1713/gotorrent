@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	_ "reflect"
 	"strconv"
 	"time"
 )
@@ -23,14 +26,23 @@ type ConnectedPeer struct {
 }
 
 type VerifiedPeer struct {
-	ip       net.IP
-	port     uint16
-	peer_id  string
-	conn     net.Conn
-	bitfield []byte
+	ip               net.IP
+	port             uint16
+	peer_id          string
+	conn             net.Conn
+	bitfield         []byte
+	idle_peer_chan   chan *VerifiedPeer
+	remove_peer_chan chan *VerifiedPeer
+}
+
+type PieceBytes struct {
+	data        []byte
+	piece_index int
 }
 
 type VerifiedPeerConnections map[string]net.Conn
+type BusyPeers []*VerifiedPeer
+type IdlePeers []*VerifiedPeer
 
 func getPeersFromByteSlice(peer_bytes []byte) []Peer {
 	var peers []Peer
@@ -49,7 +61,7 @@ func (peer Peer) handshakeWithPeer() error {
 	return nil
 }
 
-func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData, peer_connections VerifiedPeerConnections) {
+func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData) {
 	ip_addr := peer.ip.String() + ":" + strconv.Itoa(int(peer.port))
 	conn, err := net.DialTimeout("tcp", ip_addr, 8*time.Second)
 	if err != nil {
@@ -63,13 +75,17 @@ func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData
 func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPeerConnections) {
 	var connected_chan chan ConnectedPeer = make(chan ConnectedPeer)
 	var verified_chan chan VerifiedPeer = make(chan VerifiedPeer)
-	var saved_bitfield_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
+	var idle_peer_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
+	var remove_peer_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
+	//var busy_peers BusyPeers
+	//var idle_peers []*VerifiedPeer
 	for i := range peers {
 		if peers[i].ip.String() == "0.0.0.0" {
 			continue
 		}
-		go peers[i].connectToPeer(connected_chan, td, peer_connections)
+		go peers[i].connectToPeer(connected_chan, td)
 	}
+	go requestPieces(idle_peer_chan, remove_peer_chan, td)
 	for {
 		select {
 
@@ -79,12 +95,100 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 		case verified_peer := <-verified_chan:
 			ip_addr := verified_peer.ip.String() + ":" + strconv.Itoa(int(verified_peer.port))
 			peer_connections[ip_addr] = verified_peer.conn
-			go verified_peer.saveBitfield(saved_bitfield_chan)
+			verified_peer.idle_peer_chan = idle_peer_chan
+			verified_peer.remove_peer_chan = remove_peer_chan
+			go verified_peer.saveBitfield()
 
-		case verified_peer := <-saved_bitfield_chan:
-			fmt.Println("bitfield of peer saved", verified_peer.ip.String()+":"+strconv.Itoa(int(verified_peer.port)))
+			//case verified_peer := <-idle_peer_chan:
+			//fmt.Println("bitfield of peer saved", verified_peer.ip.String()+":"+strconv.Itoa(int(verified_peer.port)))
+			//idle_peers = append(idle_peers, verified_peer)
+			//fmt.Println("Saved Idle peer")
 		}
 	}
+}
+
+func requestPieces(idle_peer_chan chan *VerifiedPeer, remove_peer_chan chan *VerifiedPeer, td TorrentData) {
+	//var file_data_chan chan PieceBytes = make(chan PieceBytes)
+	var piece_bitmask = td.bitfield
+	var files = td.files
+	file_descriptors := make([]*os.File, len(files))
+	fmt.Println("Creating files", files)
+	for i := range files {
+		file_path := files[i].path
+		dir := filepath.Dir(file_path)
+		err := os.MkdirAll("./"+dir, 0777)
+		panicErr(err)
+		file_descriptors[i], err = os.Create(file_path)
+		panicErr(err)
+		fmt.Println("Created ", file_path)
+	}
+	for {
+		select {
+		case verified_peer := <-idle_peer_chan:
+			peer_bitfield := verified_peer.bitfield
+			piece_index := 0
+			found := false
+			for i := range piece_bitmask {
+				if found {
+					piece_index = i
+					break
+				}
+				for j := range peer_bitfield {
+					common := piece_bitmask[i] & peer_bitfield[j]
+					if common == 0 {
+						continue
+					}
+					common_bitmask := strconv.FormatInt(int64(common), 2)
+					for k := 0; k < 8; k++ {
+						if common_bitmask[k] == 1 {
+							//This is the bit. Flip it.
+							piece_bitmask[i] &^= (1 << uint(k))
+						}
+						piece_index = i*8 + k
+						found = true
+						break
+					}
+				}
+			}
+			if found {
+				go verified_peer.getPiece(uint32(piece_index), td)
+			} else {
+				fmt.Println("No common bit found", verified_peer.bitfield)
+			}
+		}
+	}
+}
+
+func (peer *VerifiedPeer) getPiece(piece_index uint32, td TorrentData) {
+	fmt.Println("GETTING PIECE INDEX", piece_index)
+	byte_count := piece_index*td.piece_length + td.piece_length
+	if byte_count > td.total_length {
+		fmt.Println("Last piece")
+	}
+	var block_size uint32 = 16384
+	var block_pos uint32 = 0
+	if block_size > td.piece_length {
+		panic("Block size is greater than piece size")
+	}
+	fmt.Println("Piece length is ", td.piece_length)
+	for block_pos < td.piece_length {
+		peer.getBlock(piece_index, block_pos, block_size)
+		block_pos += block_size
+	}
+	block_pos -= block_size
+	remaining_length := td.piece_length - block_pos
+	fmt.Println("remaining_length is ", remaining_length)
+	if remaining_length > 0 {
+		peer.getBlock(piece_index, block_pos, remaining_length)
+	}
+}
+func (peer *VerifiedPeer) getBlock(piece_index uint32, begin uint32, length uint32) {
+	req_msg := getRequestMessage(piece_index, begin, length)
+	_, err := peer.conn.Write(req_msg)
+	handleErr(err)
+	file_bytes, err := peer.getNextMessage()
+	fmt.Println("File bytes received", file_bytes, piece_index)
+	handleErr(err)
 }
 
 func (peer *VerifiedPeer) getNextMessage() ([]byte, error) {
@@ -102,7 +206,7 @@ func (peer *VerifiedPeer) getNextMessage() ([]byte, error) {
 	return msg, nil
 }
 
-func (peer *VerifiedPeer) saveBitfield(saved_bitfield_chan chan *VerifiedPeer) {
+func (peer *VerifiedPeer) saveBitfield() {
 	fmt.Println("Verified peer connection is", peer.conn)
 	bitfield, err := peer.getNextMessage()
 	handleErr(err)
@@ -116,16 +220,48 @@ func (peer *VerifiedPeer) saveBitfield(saved_bitfield_chan chan *VerifiedPeer) {
 		return
 	}
 	fmt.Println("Bitfield is ", bitfield)
-	peer.bitfield = bitfield
-	i_msg := getInterestedMessage()
-	_, err = peer.conn.Write(i_msg)
-	if err != nil {
-		fmt.Println("Error while sending interested message", err)
-	}
+	peer.bitfield = bitfield[1:]
+	peer.sendInterestedMessage()
+	peer.getInitialhaveMessages()
 	i_resp, err := peer.getNextMessage()
 	handleErr(err)
 	fmt.Println("RESPONSE TO INTEREST ", i_resp)
-	saved_bitfield_chan <- peer
+	peer.idle_peer_chan <- peer
+}
+
+func (peer *VerifiedPeer) sendInterestedMessage() {
+	i_msg := getInterestedMessage()
+	_, err := peer.conn.Write(i_msg)
+	if err != nil {
+		fmt.Println("Error while sending interested message", err)
+	}
+}
+
+func (peer *VerifiedPeer) getInitialhaveMessages() {
+	fmt.Println("Getting have messages")
+	is_have := true
+	for is_have {
+		next_msg, err := peer.getNextMessage()
+		if len(next_msg) == 0 {
+			fmt.Println("Empty Message returned")
+			return
+		}
+		if err != nil {
+			fmt.Println("Error in getInitialhaveMessages", err, next_msg)
+			continue
+		}
+		msg_type, err := getMessageType(next_msg[0])
+		if err != nil {
+			fmt.Println("Error in getInitialhaveMessages", err)
+			continue
+		}
+		if msg_type != "have" {
+			fmt.Println("Have message broken", msg_type)
+			is_have = false
+		}
+		peer.sendInterestedMessage()
+		fmt.Println("Have message received", next_msg)
+	}
 }
 
 func (peer ConnectedPeer) handshake(td TorrentData, verified_chan chan VerifiedPeer) {

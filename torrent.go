@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	//"github.com/nictuku/dht"
 	"github.com/zeebo/bencode"
@@ -23,17 +24,18 @@ import (
 
 type TorrentData struct {
 	info_hash     string
-	left          int64
-	downloaded    int64
-	uploaded      int64
+	left          uint32
+	downloaded    uint32
+	uploaded      uint32
 	announce_url  string
 	announce_list []string
 	//Use some sort of generator which follows convention for this. Currently S9NQEHHO48UDX16KDJWE is used always.
 	peer_id      string
 	pieces       [][]byte
-	piece_length int64
+	piece_length uint32
 	files        []File
 	bitfield     []byte
+	total_length uint32
 }
 
 type File struct {
@@ -42,17 +44,17 @@ type File struct {
 }
 
 func (td TorrentData) getTrackerDataFromAnnounceList() map[string]interface{} {
-	var tracker_response map[string]interface{}
 	for i := range td.announce_list {
-		tracker_response = td.getTrackerData(td.announce_list[i])
-		if tracker_response != nil {
+		err, tracker_response := td.getTrackerData(td.announce_list[i])
+		if err == nil {
 			return tracker_response
 		}
+		fmt.Println("Querying tracker ", td.announce_list[i], "failed with err -", err)
 	}
 	return nil
 }
 
-func (td TorrentData) getTrackerData(announce_url string) map[string]interface{} {
+func (td TorrentData) getTrackerData(announce_url string) (error, map[string]interface{}) {
 	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.info_hash)))
 	announce_url += "?info_hash=" + encoded_hash + "&left=" + strconv.Itoa(int(td.left)) + "&compact=1"
 	fmt.Println("QUERY URL IS ", announce_url)
@@ -63,21 +65,27 @@ func (td TorrentData) getTrackerData(announce_url string) map[string]interface{}
 		response_string := td.getHTTPTrackerData(announce_url)
 		response_map := bencodeStringToMap(response_string)
 		response_map["peers"] = []byte(response_map["peers"].(string))
-		return response_map
+		return nil, response_map
 	case "udp":
 		return td.getUDPTrackerData(url)
 	}
-	return nil
+	return errors.New("Tracker data not found"), nil
 }
 
-func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
+func (td TorrentData) getUDPTrackerData(url *url.URL) (error, map[string]interface{}) {
 	udpAddr, err := net.ResolveUDPAddr("udp", url.Host)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	conn, err := net.DialUDP("udp", nil, udpAddr)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	var id uint64
-	id, err = td.getUDPConnectionId(conn)
-	panicErr(err)
+	err, id = td.getUDPConnectionId(conn)
+	if err != nil {
+		return err, nil
+	}
 	return td.getDataFromUDPConnection(conn, id)
 }
 
@@ -107,16 +115,23 @@ func getDataFromFile(file_name string) TorrentData {
 	handleErr(err)
 	info_map := info.(map[string]interface{})
 	var pieces [][]byte
-	var piece_length int64
+	var piece_length uint32
 	var files []File
 	for k, v := range info_map {
+		fmt.Println("Key is ", k)
 		if k == "files" {
 			files = getFilesData(v)
 		} else if k == "pieces" {
 			pieces = getPiecesSlice([]byte(v.(string)))
 		} else if k == "piece length" {
-			piece_length = v.(int64)
+			piece_length = uint32(v.(int64))
 		}
+	}
+	if len(files) == 0 && len(info_map["name"].(string)) > 0 {
+		file_data_map := make(map[string]interface{})
+		file_data_map["length"] = info_map["length"]
+		file_data_map["path"] = []interface{}{info_map["name"]}
+		files = getFilesData([]interface{}{file_data_map})
 	}
 	total_length := getTotalFileLength(files)
 	bencoded_info, _ := bencode.EncodeString(info)
@@ -130,8 +145,8 @@ func getDataFromFile(file_name string) TorrentData {
 	torrent_data := TorrentData{
 		info_hash:     sha1_hash,
 		left:          total_length,
-		downloaded:    int64(0),
-		uploaded:      int64(0),
+		downloaded:    uint32(0),
+		uploaded:      uint32(0),
 		announce_url:  announce_url,
 		announce_list: announce_list,
 		peer_id:       "S9NQEHHO48UDX16KDJWE",
@@ -139,8 +154,9 @@ func getDataFromFile(file_name string) TorrentData {
 		piece_length:  piece_length,
 		files:         files,
 		bitfield:      bitfield,
+		total_length:  total_length,
 	}
-	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length, bitfield)
+	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length, bitfield, piece_length)
 	return torrent_data
 }
 
@@ -198,13 +214,13 @@ func bencodeStringToMap(bencode_string string) map[string]interface{} {
 	return torrent_map
 }
 
-func getTotalFileLength(files []File) int64 {
+func getTotalFileLength(files []File) uint32 {
 	var total_length int64
 	total_length = 0
 	for i := range files {
 		total_length += files[i].length
 	}
-	return total_length
+	return uint32(total_length)
 }
 
 func hex2int(hexStr string) int {
@@ -255,75 +271,117 @@ func (td TorrentData) getHTTPTrackerData(announce_url string) string {
 }
 
 //Check http://www.bittorrent.org/beps/bep_0015.html (BEP15) for details
-func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (connection_id uint64, err error) {
+func (td TorrentData) getUDPConnectionId(con *net.UDPConn) (err error, connection_id uint64) {
 	var udp_request_id uint64 = 0x41727101980 //magic constant
 	transaction_id := rand.Uint32()
 	udp_request := new(bytes.Buffer)
 	err = binary.Write(udp_request, binary.BigEndian, udp_request_id)
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	//send action as 0 for a connection request
 	err = binary.Write(udp_request, binary.BigEndian, uint32(0))
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	err = binary.Write(udp_request, binary.BigEndian, transaction_id)
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	_, err = con.Write(udp_request.Bytes())
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	response_bytes := make([]byte, 16)
 	_, err = con.Read(response_bytes)
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	connection_response := bytes.NewBuffer(response_bytes)
 	var response_action uint32
 	err = binary.Read(connection_response, binary.BigEndian, &response_action)
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 	var response_transaction_id uint32
 	err = binary.Read(connection_response, binary.BigEndian, &response_transaction_id)
-	panicErr(err)
+	if err != nil {
+		return err, 0
+	}
 
 	err = binary.Read(connection_response, binary.BigEndian, &connection_id)
 	if err != nil {
 		return
 	}
-	return connection_id, nil
+	return nil, connection_id
 }
 
-func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id uint64) map[string]interface{} {
+func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id uint64) (error, map[string]interface{}) {
 	transaction_id := rand.Uint32()
 	announce_request := new(bytes.Buffer)
 	err := binary.Write(announce_request, binary.BigEndian, connection_id)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//send action as 1 for an announce request
 	err = binary.Write(announce_request, binary.BigEndian, uint32(1))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, transaction_id)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//binary.Write requires fixed size value or a slice of fixed slice values
 	err = binary.Write(announce_request, binary.BigEndian, []byte(td.info_hash))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, []byte(td.peer_id))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, td.downloaded)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, td.left)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, td.uploaded)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//use '0' for event, which means none. Check BEP15 for the various event types and implement them
 	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//use default ip address, 0.
 	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	err = binary.Write(announce_request, binary.BigEndian, uint32(0))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//number of peers wanted
 	var num_want uint32 = 30
 	err = binary.Write(announce_request, binary.BigEndian, num_want)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	//specify port number to use
 	err = binary.Write(announce_request, binary.BigEndian, uint16(6881))
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	_, err = con.Write(announce_request.Bytes())
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 
 	response_len := 20 + 6*num_want
 	responseBytes := make([]byte, response_len)
@@ -333,27 +391,39 @@ func (td TorrentData) getDataFromUDPConnection(con *net.UDPConn, connection_id u
 	udp_tracker_data := make(map[string]interface{})
 	var response_action uint32
 	err = binary.Read(response, binary.BigEndian, &response_action)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["response_action"] = response_action
 	var response_transaction_id uint32
 	err = binary.Read(response, binary.BigEndian, &response_transaction_id)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["response_transaction_id"] = response_transaction_id
 	var interval uint32
 	err = binary.Read(response, binary.BigEndian, &interval)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["interval"] = interval
 	var leechers uint32
 	err = binary.Read(response, binary.BigEndian, &leechers)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["leechers"] = leechers
 	var seeders uint32
 	err = binary.Read(response, binary.BigEndian, &seeders)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["seeders"] = seeders
 	peer_bytes := make([]byte, 6*num_want)
 	err = binary.Read(response, binary.BigEndian, &peer_bytes)
-	panicErr(err)
+	if err != nil {
+		return err, nil
+	}
 	udp_tracker_data["peers"] = peer_bytes
-	return udp_tracker_data
+	return nil, udp_tracker_data
 }
