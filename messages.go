@@ -27,7 +27,7 @@ func getMessageType(message_id byte) (string, error) {
 	message_types := map[byte]string{
 		4: "have",
 		5: "bitfield",
-		1: "interested",
+		1: "unchoke",
 	}
 	msg_type := message_types[message_id]
 	if msg_type == "" {
