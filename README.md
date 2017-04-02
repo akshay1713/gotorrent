@@ -3,10 +3,10 @@ A simple command line bittorrent client.
 
 This enables file sharing via the bittorrent p2p protocol.
 
-Currently, it can only download one torrent at a time, and only supports downloading not uploading.
+Currently, it can only download one torrent at a time, and only supports downloading, not uploading.
 Both udp and http trackers are supported.
 
-The application does not involve refreshing peers at regular intervals, so it can download only very small files. 
+The application does not refresh peers at regular intervals, so it can download only very small files. 
 However, it should be simple to implement and I plan to do that soon.
 
 After that I will be shelving this project for the forseeable future.
