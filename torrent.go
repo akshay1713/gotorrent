@@ -36,6 +36,7 @@ type TorrentData struct {
 	files        []File
 	bitfield     []byte
 	total_length int64
+	left_bitmask []byte
 }
 
 type File struct {
@@ -69,7 +70,10 @@ func (td TorrentData) getTrackerData(announce_url string, tracker_data chan map[
 
 func (td TorrentData) getUDPTrackerData(url *url.URL) map[string]interface{} {
 	udpAddr, err := net.ResolveUDPAddr("udp", url.Host)
-	panicErr(err)
+	if err != nil {
+		fmt.Println("Error while resolving tracker address", err)
+		return make(map[string]interface{})
+	}
 	conn, err := net.DialUDP("udp", nil, udpAddr)
 	panicErr(err)
 	var id uint64
@@ -143,8 +147,9 @@ func getDataFromFile(file_name string) TorrentData {
 		files:         files,
 		bitfield:      bitfield,
 		total_length:  total_length,
+		left_bitmask:  bitfield,
 	}
-	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length, bitfield)
+	fmt.Println("Pieces and length are ", len(pieces), len(pieces)*int(piece_length), total_length, bitfield, piece_length)
 	createFiles(torrent_data)
 	return torrent_data
 }
@@ -165,7 +170,8 @@ func createFiles(td TorrentData) {
 }
 
 func getBitfieldFromPieceCount(num_pieces int) []byte {
-	bitfield := make([]byte, (num_pieces+(num_pieces%16))/8)
+	fmt.Println(num_pieces)
+	bitfield := make([]byte, (num_pieces-(num_pieces%8))/8+1)
 	i := 0
 	j := 0
 	for i = 0; i < num_pieces-8; i += 8 {

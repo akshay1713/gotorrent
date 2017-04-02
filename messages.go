@@ -1,10 +1,5 @@
 package main
 
-import (
-	_ "encoding/binary"
-	"errors"
-)
-
 //Refer to https://wiki.theory.org/BitTorrentSpecification#Handshake for details
 func getHandshakeMessage(info_hash string, peer_id string) []byte {
 	protocol_name := "BitTorrent protocol"
@@ -20,27 +15,36 @@ func getHandshakeMessage(info_hash string, peer_id string) []byte {
 }
 
 func getInterestedMessage() []byte {
-	return []byte{1, 2}
+	return []byte{0, 0, 0, 1, 2}
 }
 
-func getMessageType(message_id byte) (string, error) {
+func getMessageType(message []byte) string {
 	message_types := map[byte]string{
+		0: "choke",
+		1: "unchoke",
+		2: "interested",
+		3: "not interested",
 		4: "have",
 		5: "bitfield",
-		1: "unchoke",
+		6: "request",
+		7: "piece",
+		8: "cancel",
+		9: "port",
 	}
+	message_id := message[0]
 	msg_type := message_types[message_id]
 	if msg_type == "" {
-		return msg_type, errors.New("Message type not found")
+		return "unknown"
 	}
-	return msg_type, nil
+	return msg_type
 }
 
 func getRequestMessage(piece_index uint32, begin uint32, length uint32) []byte {
-	msg := make([]byte, 13)
-	msg[0] = 6
-	getBytesFromUint32(msg[1:5], piece_index)
-	getBytesFromUint32(msg[5:9], begin)
-	getBytesFromUint32(msg[9:13], length)
+	msg := make([]byte, 17)
+	getBytesFromUint32(msg[0:4], 13)
+	msg[4] = 6
+	getBytesFromUint32(msg[5:9], piece_index)
+	getBytesFromUint32(msg[9:13], begin)
+	getBytesFromUint32(msg[13:17], length)
 	return msg
 }
