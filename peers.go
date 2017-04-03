@@ -129,12 +129,10 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 				bit_to_reset := (current_piece_index % 8)
 				td.bitfield[byte_to_reset] |= 1 << bit_to_reset
 				next_piece_index := peer.requestPiece(td)
-				fmt.Println("Getting piece with index", next_piece_index, peer.bitfield, td.bitfield, peer.ip)
 				if next_piece_index == -1 {
 					fmt.Println("No common pieces found, returning")
 					continue
 				}
-				fmt.Println("Piece by peer", peer.ip, next_piece_index)
 				current_piece_index = uint32(next_piece_index)
 				current_block_offset = 0
 				current_length, last_piece = peer.getBlockLength(current_piece_index, current_block_offset, block_size, td)
@@ -152,12 +150,10 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 				if !piece_complete {
 					getting_piece = true
 					next_piece_index := peer.requestPiece(td)
-					fmt.Println("Getting piece with index", next_piece_index, peer.bitfield, td.bitfield, peer.ip)
 					if next_piece_index == -1 {
 						fmt.Println("No common pieces found, returning")
 						continue
 					}
-					fmt.Println("Piece by peer", peer.ip, next_piece_index)
 					current_piece_index = uint32(next_piece_index)
 					current_length, last_piece = peer.getBlockLength(current_piece_index, current_block_offset, block_size, td)
 					peer.getBlock(current_piece_index, current_block_offset, current_length)
@@ -217,12 +213,10 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 					current_piece = []byte{}
 					getting_piece = true
 					next_piece_index := peer.requestPiece(td)
-					fmt.Println("Getting piece with index", next_piece_index, peer.bitfield, td.bitfield, peer.ip)
 					if next_piece_index == -1 {
 						fmt.Println("No common pieces found, returning")
 						continue
 					}
-					fmt.Println("Piece by peer", peer.ip, next_piece_index)
 					current_piece_index = uint32(next_piece_index)
 					current_length, last_piece = peer.getBlockLength(current_piece_index, current_block_offset, block_size, td)
 					peer.getBlock(current_piece_index, current_block_offset, current_length)
@@ -237,12 +231,10 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 				bit_to_reset := (current_piece_index % 8)
 				td.bitfield[byte_to_reset] |= 1 << bit_to_reset
 				next_piece_index := peer.requestPiece(td)
-				fmt.Println("Getting piece with index", next_piece_index, peer.bitfield, td.bitfield, peer.ip)
 				if next_piece_index == -1 {
 					fmt.Println("No common pieces found, returning")
 					continue
 				}
-				fmt.Println("Piece by peer", peer.ip, next_piece_index)
 				current_piece_index = uint32(next_piece_index)
 				current_block_offset = 0
 				peer.getBlock(current_piece_index, current_block_offset, block_size)

@@ -1,13 +1,11 @@
 package main
 
 import (
-	//"bufio"
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	//"github.com/nictuku/dht"
 	"github.com/zeebo/bencode"
 	"io/ioutil"
 	"math/rand"
@@ -53,7 +51,7 @@ func (td TorrentData) getTrackerDataFromAnnounceList(tracker_data chan map[strin
 func (td TorrentData) getTrackerData(announce_url string, tracker_data chan map[string]interface{}) {
 	encoded_hash := encodeInfoHash(hex.EncodeToString([]byte(td.info_hash)))
 	announce_url += "?info_hash=" + encoded_hash + "&left=" + strconv.Itoa(int(td.left)) + "&compact=1"
-	fmt.Println("QUERY URL IS ", announce_url)
+	fmt.Println("Contacting tracker", announce_url)
 	url, err := url.Parse(announce_url)
 	handleErr(err)
 	switch url.Scheme {
