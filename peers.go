@@ -32,7 +32,6 @@ type VerifiedPeer struct {
 	peer_id          string
 	conn             net.Conn
 	bitfield         []byte
-	idle_peer_chan   chan *VerifiedPeer
 	remove_peer_chan chan *VerifiedPeer
 	is_unchoked      bool
 	is_active        bool
@@ -72,7 +71,6 @@ func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData
 func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPeerConnections) {
 	var connected_chan chan ConnectedPeer = make(chan ConnectedPeer)
 	var verified_chan chan VerifiedPeer = make(chan VerifiedPeer)
-	var idle_peer_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
 	var remove_peer_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
 	for i := range peers {
 		if peers[i].ip.String() == "0.0.0.0" {
@@ -91,10 +89,17 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 			_, ok := peer_connections[ip_addr]
 			if !ok {
 				peer_connections[ip_addr] = true
-				verified_peer.idle_peer_chan = idle_peer_chan
 				verified_peer.remove_peer_chan = remove_peer_chan
 				go verified_peer.startMessageLoop(&td)
 			}
+
+		case peer_to_remove := <-remove_peer_chan:
+			err := peer_to_remove.conn.Close()
+			handleErr(err)
+			if err != nil {
+				fmt.Println("Error while closing peer connection", err)
+			}
+			peer_connections[peer_to_remove.ip.String()] = false
 		}
 	}
 }
@@ -147,6 +152,7 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 			case "have":
 				fmt.Println("Have message", next_msg)
 			case "unchoke":
+				peer.is_unchoked = true
 				if !piece_complete {
 					getting_piece = true
 					next_piece_index := peer.requestPiece(td)
@@ -161,6 +167,7 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 					fmt.Println("Got unchoke while getting piece", current_piece_index, current_block_offset, peer.ip)
 				}
 			case "choke":
+				peer.is_unchoked = false
 			case "piece":
 				recvd_piece_index := binary.BigEndian.Uint32(next_msg[1:5])
 				recvd_block_offset := binary.BigEndian.Uint32(next_msg[5:9])
@@ -302,6 +309,7 @@ func (peer *VerifiedPeer) getBlock(piece_index uint32, begin uint32, length uint
 	_, err := peer.conn.Write(req_msg)
 	if err != nil {
 		fmt.Println("Error while getting block", err)
+		peer.remove_peer_chan <- peer
 	}
 }
 
@@ -337,11 +345,6 @@ func (peer *VerifiedPeer) saveBitfield() {
 	}
 	peer.bitfield = bitfield[1:]
 	peer.getInitialhaveMessages()
-	if peer.is_unchoked {
-		peer.idle_peer_chan <- peer
-	} else {
-		peer.UnchokePeer()
-	}
 }
 
 func (peer *VerifiedPeer) sendInterestedMessage() {
@@ -349,22 +352,11 @@ func (peer *VerifiedPeer) sendInterestedMessage() {
 	_, err := peer.conn.Write(i_msg)
 	if err != nil {
 		peer.is_active = false
+		peer.remove_peer_chan <- peer
 		return
 	}
 }
 
-func (peer *VerifiedPeer) UnchokePeer() {
-	for _ = range time.Tick(120 * time.Second) {
-		if !peer.is_unchoked && peer.is_active {
-			peer.sendInterestedMessage()
-			if peer.is_unchoked {
-				return
-			}
-		} else {
-			return
-		}
-	}
-}
 func (peer *VerifiedPeer) getInitialhaveMessages() {
 	is_have := true
 	for is_have {
@@ -374,6 +366,7 @@ func (peer *VerifiedPeer) getInitialhaveMessages() {
 			return
 		}
 		if err != nil {
+			peer.remove_peer_chan <- peer
 			continue
 		}
 		msg_type := getMessageType(next_msg)
@@ -406,7 +399,10 @@ func (peer ConnectedPeer) handshake(td TorrentData, verified_chan chan VerifiedP
 func (peer ConnectedPeer) sendHandshake(td TorrentData) {
 	handshake_msg := getHandshakeMessage(td.info_hash, td.peer_id)
 	_, err := peer.conn.Write(handshake_msg)
-	panicErr(err)
+	if err != nil {
+		fmt.Println("Error while sending handshake, closing connection", err)
+		_ = peer.conn.Close()
+	}
 }
 
 func (peer ConnectedPeer) completeHandshake(td TorrentData) ([]byte, error) {
