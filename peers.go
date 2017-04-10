@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"reflect"
 	"strconv"
 	"time"
@@ -39,7 +38,7 @@ type VerifiedPeer struct {
 
 type PieceBytes struct {
 	data        []byte
-	piece_index int
+	piece_index uint32
 }
 
 type VerifiedPeerConnections map[string]bool
@@ -68,7 +67,7 @@ func (peer Peer) connectToPeer(connected_chan chan ConnectedPeer, td TorrentData
 	connected_chan <- connected_peer
 }
 
-func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPeerConnections) {
+func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPeerConnections, file_chan chan PieceBytes) {
 	var connected_chan chan ConnectedPeer = make(chan ConnectedPeer)
 	var verified_chan chan VerifiedPeer = make(chan VerifiedPeer)
 	var remove_peer_chan chan *VerifiedPeer = make(chan *VerifiedPeer)
@@ -90,7 +89,7 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 			if !ok {
 				peer_connections[ip_addr] = true
 				verified_peer.remove_peer_chan = remove_peer_chan
-				go verified_peer.startMessageLoop(&td)
+				go verified_peer.startMessageLoop(&td, file_chan)
 			}
 
 		case peer_to_remove := <-remove_peer_chan:
@@ -104,8 +103,8 @@ func connectToAllPeers(peers []Peer, td TorrentData, peer_connections VerifiedPe
 	}
 }
 
-func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
-	var files = td.files
+func (peer *VerifiedPeer) startMessageLoop(td *TorrentData, file_chan chan PieceBytes) {
+	//var files = td.files
 	var current_length uint32
 	var current_piece_index uint32
 	var current_block_offset uint32
@@ -183,35 +182,13 @@ func (peer *VerifiedPeer) startMessageLoop(td *TorrentData) {
 					if reflect.DeepEqual(piece_hash, td.pieces[current_piece_index]) || last_piece {
 						last_piece = false
 						fmt.Println("Piece complete", current_piece_index, td.pieces[current_piece_index], piece_hash)
-						byte_position := current_piece_index * uint32(td.piece_length)
-						for i := range files {
-							if int64(byte_position) < files[i].length-int64(len(current_piece)) {
-								file_ptr, err := os.OpenFile(files[i].path, os.O_WRONLY, 0777)
-								handleErr(err)
-								_, err = file_ptr.Seek(int64(byte_position), 0)
-								_, err = file_ptr.Write(current_piece)
-								handleErr(err)
-								file_ptr.Close()
-								getting_piece = false
-								break
-							} else if int64(byte_position) < files[i].length {
-								first_file_left := files[i].length - int64(byte_position)
-								file_ptr, err := os.OpenFile(files[i].path, os.O_WRONLY, 0777)
-								handleErr(err)
-								_, err = file_ptr.Seek(int64(byte_position), 0)
-								_, err = file_ptr.Write(current_piece[0:first_file_left])
-								handleErr(err)
-								file_ptr.Close()
-								file_ptr, err = os.OpenFile(files[i+1].path, os.O_WRONLY, 0777)
-								handleErr(err)
-								_, err = file_ptr.Seek(0, 0)
-								_, err = file_ptr.Write(current_piece[first_file_left:])
-								handleErr(err)
-								file_ptr.Close()
-								getting_piece = false
-								break
-							}
+						piece_bytes := PieceBytes{
+							piece_index: current_piece_index,
+							data:        current_piece,
 						}
+						getting_piece = false
+						file_chan <- piece_bytes
+						//byte_position := current_piece_index * uint32(td.piece_length)
 					} else {
 						fmt.Println("Piece not verified", current_piece_index)
 					}
